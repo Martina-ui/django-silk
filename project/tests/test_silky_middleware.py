@@ -1,14 +1,25 @@
 from unittest.mock import patch
 
+from django.http import HttpResponse
 from django.test import TestCase, override_settings
+from django.urls import path
 from django.urls import reverse, set_script_prefix
 
 from silk.config import SilkyConfig
 from silk.errors import SilkNotConfigured
 from silk.middleware import SilkyMiddleware, _should_intercept
-from silk.models import Request
+from silk.models import Profile, Request, Response, SQLQuery
 
 from .util import mock_data_collector
+
+
+def server_error_response(request):
+    return HttpResponse(status=500)
+
+
+urlpatterns = [
+    path('status-500/', server_error_response),
+]
 
 
 def fake_get_response():
@@ -201,3 +212,107 @@ class TestShouldIntercept(TestCase):
             self.assertFalse(should_intercept)
         finally:
             set_script_prefix('/')
+
+
+class TestInterceptStatusCodes(TestCase):
+    def set_status_codes(self, status_codes):
+        config = SilkyConfig()
+        previous_status_codes = config.SILKY_INTERCEPT_STATUS_CODES
+        self.addCleanup(
+            setattr,
+            config,
+            'SILKY_INTERCEPT_STATUS_CODES',
+            previous_status_codes,
+        )
+        config.SILKY_INTERCEPT_STATUS_CODES = status_codes
+
+    def test_request_with_unconfigured_status_code_is_not_retained(self):
+        self.set_status_codes({500})
+
+        response = self.client.get(reverse('example_app:index'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(Request.objects.count(), 0)
+
+    def test_none_status_codes_retains_request(self):
+        self.set_status_codes(None)
+
+        response = self.client.get(reverse('example_app:index'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(Request.objects.count(), 1)
+
+    def test_matching_status_code_retains_request(self):
+        self.set_status_codes({200})
+
+        response = self.client.get(reverse('example_app:index'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(Request.objects.count(), 1)
+        self.assertEqual(Response.objects.count(), 1)
+        self.assertEqual(Response.objects.get().status_code, 200)
+
+    def test_matching_status_code_from_multiple_codes_retains_request(self):
+        self.set_status_codes({200, 404, 500})
+
+        response = self.client.get(reverse('example_app:index'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(Request.objects.count(), 1)
+        self.assertEqual(Response.objects.count(), 1)
+        self.assertEqual(Response.objects.get().status_code, 200)
+
+    def test_unmatching_status_code_does_not_retain_request(self):
+        self.set_status_codes({404, 500})
+
+        response = self.client.get(reverse('example_app:index'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(Request.objects.count(), 0)
+
+    def test_empty_status_codes_does_not_retain_request_or_related_records(self):
+        self.set_status_codes(set())
+
+        response = self.client.get(reverse('example_app:index'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(Request.objects.count(), 0)
+        self.assertEqual(Response.objects.count(), 0)
+        self.assertEqual(SQLQuery.objects.count(), 0)
+        self.assertEqual(Profile.objects.count(), 0)
+
+    @override_settings(ROOT_URLCONF='tests.test_silky_middleware')
+    def test_matching_500_status_code_retains_request(self):
+        self.set_status_codes({500})
+
+        response = self.client.get('/status-500/')
+
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(Request.objects.count(), 1)
+        self.assertEqual(Response.objects.count(), 1)
+        self.assertEqual(Response.objects.get().status_code, 500)
+
+    @override_settings(ROOT_URLCONF='tests.test_silky_middleware')
+    def test_unmatching_404_status_code_does_not_retain_request(self):
+        self.set_status_codes({500})
+
+        response = self.client.get('/status-404/')
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(Request.objects.count(), 0)
+
+    @override_settings(ROOT_URLCONF='tests.test_silky_middleware')
+    def test_matching_404_and_500_status_codes_retain_requests(self):
+        self.set_status_codes({404, 500})
+
+        not_found_response = self.client.get('/status-404/')
+        server_error_response = self.client.get('/status-500/')
+
+        self.assertEqual(not_found_response.status_code, 404)
+        self.assertEqual(server_error_response.status_code, 500)
+        self.assertEqual(Request.objects.count(), 2)
+        self.assertEqual(Response.objects.count(), 2)
+        self.assertCountEqual(
+            Response.objects.values_list('status_code', flat=True),
+            [404, 500],
+        )

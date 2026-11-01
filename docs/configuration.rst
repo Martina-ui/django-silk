@@ -38,6 +38,22 @@ a huge impact on space/time performance. This behaviour can be configured with f
 	SILKY_MAX_RESPONSE_BODY_SIZE = 1024  # If response body>1024kb, ignore
 
 
+Response status codes
+---------------------
+
+By default, Silk saves requests regardless of their response status code. To save only requests
+with specific response status codes, configure ``SILKY_INTERCEPT_STATUS_CODES``:
+
+.. code-block:: python
+
+	SILKY_INTERCEPT_STATUS_CODES = None  # Save all requests (default)
+	SILKY_INTERCEPT_STATUS_CODES = {500}  # Save only requests with a 500 response
+	SILKY_INTERCEPT_STATUS_CODES = {404, 500}  # Save requests with a 404 or 500 response
+	SILKY_INTERCEPT_STATUS_CODES = set()  # Do not retain any requests
+
+This setting only controls which requests Silk saves. It does not change the response sent to the user.
+
+
 Meta-Profiling
 --------------
 
