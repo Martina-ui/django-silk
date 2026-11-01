@@ -164,6 +164,11 @@ class SilkyMiddleware:
                 collector.stop_python_profiler()
                 silk_request = collector.request
                 if silk_request:
+                    status_codes = SilkyConfig().SILKY_INTERCEPT_STATUS_CODES
+                    if status_codes is not None and response.status_code not in status_codes:
+                        silk_request.delete()
+                        collector.clear()
+                        return
                     ResponseModelFactory(response).construct_response_model()
                     silk_request.end_time = timezone.now()
                     collector.finalise()
